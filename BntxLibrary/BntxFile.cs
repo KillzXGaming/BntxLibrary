@@ -33,7 +33,7 @@ namespace BntxLibrary
         /// </summary>
         [Category("Header")]
         [DisplayName("Name")]
-        public string Name { get; set; } = "textures";
+        public string Name { get; set; }
 
         /// <summary>
         /// The data alignment.
@@ -95,12 +95,6 @@ namespace BntxLibrary
         /// </summary>
         public Dictionary<string, BntxTexture> Textures { get; set; } = [];
 
-        public BntxFile()
-        {
-            BinHeader = new();
-            BntxHeader = new(); 
-        }
-
         public BntxFile(string filename)
             => BntxReader.Read(this, new FileReader(filename));
 
@@ -108,10 +102,7 @@ namespace BntxLibrary
             => BntxReader.Read(this, new FileReader(stream));
 
         public void Save(string filename)
-        {
-            using (var fs = new FileStream(filename, FileMode.Create, FileAccess.Write))
-                BntxWriter.Write(this, new FileWriter(fs));
-        }
+            => BntxWriter.Write(this, new FileWriter(filename));
         public void Save(Stream stream)
             => BntxWriter.Write(this, new FileWriter(stream));
 
@@ -149,7 +140,7 @@ namespace BntxLibrary
             {
                 hash ^= HashHelper.ComputeHash32(texture.Name);
                 hash ^= HashHelper.ComputeHash32(texture.Header);
-                hash ^= HashHelper.ComputeHash32(texture.ImageData.ToArray());
+                hash ^= HashHelper.ComputeHash32(texture.ImageData);
                 foreach (var usd in texture.UserData.Values)
                 {
                     hash ^= HashHelper.ComputeHash32(usd.Name);
@@ -421,12 +412,12 @@ namespace BntxLibrary
         /// <summary>
         /// Gets or sets the mip offsets relative to the image data.
         /// </summary>
-        public ulong[] MipOffsets { get; set; } = new ulong[0];
+        public ulong[] MipOffsets { get; set; }
 
         /// <summary>
         /// Gets or sets user data of the texture.
         /// </summary>
-        public Dictionary<string, UserData> UserData { get; set; } = new();
+        public Dictionary<string, UserData> UserData { get; set; } = [];
 
         /// <summary>
         /// The image data.
@@ -439,25 +430,12 @@ namespace BntxLibrary
             {
                 return this.Header.TextureLayout & 7;
             }
-            set
-            {
-                this.Header.TextureLayout = (this.Header.TextureLayout & ~7u) | (value & 7u);
-            }
         }
 
         public event PropertyChangedEventHandler? PropertyChanged;
         protected void OnPropertyChanged(string propertyName) =>
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 
-        public BntxTexture()
-        {
-            this.Header = new()
-            {
-                ResHeader = new() {
-                    Magic = "BRTI"
-                },
-            };
-        }
     }
 
     public class UserData
@@ -573,7 +551,7 @@ namespace BntxLibrary
             VersionMicro = 0;
             VersionMinor = 0;
             VersionMajor = 4;
-            ByteOrder = 0xFEFF;
+            ByteOrder = 0xFFFE;
             Alignment = 0xC;
             TargetAddressSize = 0x40;
             Flag = 0;
@@ -641,7 +619,7 @@ namespace BntxLibrary
         public GfxChannelSource GfxChannelSourceG;
         public GfxChannelSource GfxChannelSourceB;
         public GfxChannelSource GfxChannelSourceA;
-        public GfxImageDimension SurfaceDim;
+        public uint SurfaceDim;
 
         internal ulong NameOffset;
         internal ulong BntxHeaderOffset;
@@ -666,9 +644,6 @@ namespace BntxLibrary
             this.GfxChannelSourceG = GfxChannelSource.Green;
             this.GfxChannelSourceB = GfxChannelSource.Blue;
             this.GfxChannelSourceA = GfxChannelSource.Alpha;
-            this.TextureLayout = 4;
-            this.TextureLayout2 = 65543;
-            this.SurfaceDim = GfxImageDimension.Type2D;
         }
     }
 

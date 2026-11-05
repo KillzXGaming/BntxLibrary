@@ -31,7 +31,7 @@ namespace BntxLibrary
             public byte PaddingCount; // padding count as uint64. Reads to the next structure offset
         }
 
-        internal void Build(List<Pointer> pointers, List<(long, long)> sectionRanges, long sectionEnd)
+        public void Build(List<Pointer> pointers, List<(long, long)> sectionRanges, long sectionEnd)
         {
             this.Sections.Clear();
             this.Entries.Clear();
@@ -117,7 +117,7 @@ namespace BntxLibrary
         // ArrayCount = 18 ( we have 18 dictionaries)
         // PointerCount = 1 (we have only 1 offset)
         // PaddingCount = 1 (we read 1 uint64 until next offset from the next DictionaryEntry entry. All sections are aligned by 8.
-        private List<Entry> Build(List<Pointer> sectionPointers)
+        public List<Entry> Build(List<Pointer> sectionPointers)
         {
             const int PTR_SIZE = 8;
 
@@ -132,7 +132,7 @@ namespace BntxLibrary
                 if (i + 1 < sectionPointers.Count)
                     stride = sectionPointers[i + 1].Position - sectionPointers[i].Position;
 
-                // Pointers in array
+                // Consecutive pointers with same stride
                 int arrayCount = 1;
                 int j = i + 1;
                 while (j < sectionPointers.Count &&

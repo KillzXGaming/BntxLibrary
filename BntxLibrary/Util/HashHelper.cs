@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 
 namespace BntxLibrary.Util
 {
-    internal class HashHelper
+    public class HashHelper
     {
         public static uint ComputeHash32(Stream stream)
         {

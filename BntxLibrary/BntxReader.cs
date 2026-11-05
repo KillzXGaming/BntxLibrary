@@ -29,9 +29,9 @@ namespace BntxLibrary
             reader.CheckSignature(bntx.BntxHeader.Magic, new[] { "NX  ", "Ounc", "PC  " });
             switch (bntx.BntxHeader.Magic)
             {
+                case "PC  ": bntx.Platform = PlatformKind.PC; break;
                 case "NX  ": bntx.Platform = PlatformKind.NX; break;
                 case "Ounc": bntx.Platform = PlatformKind.Ounce; break;
-                case "PC  ": bntx.Platform = PlatformKind.PC; break;
             }
             // Name (not relative to length so subtract 2)
             bntx.Name = ReadNameOffset(bntx.BinHeader.NameOffset - 2, reader, bntx);
@@ -56,10 +56,7 @@ namespace BntxLibrary
                         var mipOffsets = reader.ReadUInt64s((int)tex.Header.MipCount);
                         // Points to data directly from BRTD buffer
                         reader.SeekBegin((long)mipOffsets[0]);
-                        using (reader.TemporarySeek((long)mipOffsets[0], SeekOrigin.Begin)) {
-                            tex.ImageData = reader.ReadBytes((int)tex.Header.ImageSize);
-                        }
-                       // tex.ImageData = new SubStream(reader.BaseStream, (long)mipOffsets[0], tex.Header.ImageSize);
+                        tex.ImageData = reader.ReadBytes((int)tex.Header.ImageSize);
                         // Set mip offsets relative to first
                         tex.MipOffsets = new ulong[mipOffsets.Length];
                         for (int j = 0; j < mipOffsets.Length; j++)

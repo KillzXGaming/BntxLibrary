@@ -42,20 +42,6 @@ namespace BntxLibrary
         Alpha = 0x5
     }
 
-    public enum GfxImageDimension : uint
-    {
-        Type1D = 0,
-        Type2D = 1,
-        Type3D = 2,
-        TypeCube = 3,
-        Type1DArray = 4,
-        Type2DArray = 5,
-        Type2DMultisample = 6,
-        Type2DMultisampleArray = 7,
-        TypeCubeArray = 8,
-        TypeRectangle = 9,
-    }
-
     public enum GfxImageStorageDimension : byte
     {
         Dim1D = 1,

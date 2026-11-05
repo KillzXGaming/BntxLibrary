@@ -19,39 +19,9 @@ namespace BntxLibrary
         static List<(long, long)> _rltSectionRanges = new List<(long, long)>();
         static List<long> _blocks = new List<long>();
 
-        static List<RelocationTable.Entry> _section1Entries = new();
-        static List<RelocationTable.Entry> _section2Entries = new();
-
-        static bool forceReloactionUpdate = true;
-
-        static void InsertRelocationPointerSection1(long pos, int count, int arrayCount, int padding)
-        {
-            _section1Entries.Add(new RelocationTable.Entry()
-            {
-                PointersOffset = (int)pos,
-                PointerCount = (byte)count,
-                ArrayCount = (ushort)arrayCount,
-                PaddingCount = (byte)padding,
-            });
-        }
-
-        static void InsertRelocationPointerSection2(long pos, int count, int arrayCount, int padding)
-        {
-            _section2Entries.Add(new RelocationTable.Entry()
-            {
-                PointersOffset = (int)pos,
-                PointerCount = (byte)count,
-                ArrayCount = (ushort)arrayCount,
-                PaddingCount = (byte)padding,
-            });
-        }
-
         public static void Write(BntxFile bntx, FileWriter writer)
         {
             _pointers = new Dictionary<long, long>();
-            _stringTable = new Dictionary<string, long>();
-            _rltSectionRanges = new List<(long, long)>();
-            _blocks = new List<long>();
 
             switch (bntx.Platform)
             {
@@ -69,22 +39,13 @@ namespace BntxLibrary
             // Block offset is 0x16 (ushort) in the bin header
             _blocks.Add(0x16);
 
-            bntx.BntxHeader.TextureCount = (uint)bntx.Textures.Count;
-
             long _ofsStartBntxHeader = writer.Position;
             writer.WriteStruct(bntx.BntxHeader);
-
-            InsertRelocationPointerSection1(40, 1, 2, 1); // Texture Array Offset
-            InsertRelocationPointerSection2(48, 1, 1, 0); // Texture Block Array Offset
-
-            InsertRelocationPointerSection1(64, 1, 1, 0); // Memory pool offset
 
             WriteOffset(writer, _ofsStartBntxHeader + 32);
             writer.Write(new byte[0x140]); // Memory pool
             // Write offsets
             writer.Align(8);
-            InsertRelocationPointerSection1(writer.Position, bntx.Textures.Count, 1, 0); // Texture Array
-
             long _ofsStartImagePointers = writer.Position;
             WriteOffset(writer, _ofsStartBntxHeader + 8);
             writer.Write(new ulong[bntx.Textures.Count]);
@@ -95,7 +56,6 @@ namespace BntxLibrary
             writer.Align(8);
             WriteOffset(writer, _ofsStartBntxHeader + 24);
             WriteDictionary(writer, bntx.Textures.Keys.ToList());
-
 
             List<long> dataOffsets = new List<long>();
 
@@ -127,11 +87,6 @@ namespace BntxLibrary
 
                 tex.Header.DataPointersOffset = (ulong)writer.Position;
 
-                InsertRelocationPointerSection1(headerStart + 96, 3, 1, 0); // name, header, data pointers
-                InsertRelocationPointerSection1(headerStart + 96 + 24, 1, 1, 0); // user data
-                InsertRelocationPointerSection1(headerStart + 96 + 32, 2, 1, 0); // ptr/view data
-                InsertRelocationPointerSection1(headerStart + 96 + 56, 1, 1, 0); // user data dict
-
                 // Add offsets for relocation
                 _pointers.TryAdd(headerStart + 96, (long)tex.Header.NameOffset);
                 _pointers.TryAdd(headerStart + 96 + 8, (long)tex.Header.BntxHeaderOffset);
@@ -144,8 +99,6 @@ namespace BntxLibrary
                 _pointers.TryAdd(headerStart + 96 + 56, (long)tex.Header.UserDataDictionaryOffset);
 
                 WriteOffset(writer, headerStart + 96 + 16);
-                InsertRelocationPointerSection2(writer.Position, tex.Header.MipCount, 1, 0); // mip offsets
-
                 dataOffsets.Add(writer.Position);
                 writer.Write(new ulong[tex.Header.MipCount]); // Mip offsets
                 textureIndex++;
@@ -173,34 +126,12 @@ namespace BntxLibrary
             // Relocation table
             _rltSectionRanges.Add((section2Start, writer.Position));
 
-            if (bntx.HasFileSizeChanges || forceReloactionUpdate)
-            {
-                bntx._relocationTable.Sections.Clear();
-                bntx._relocationTable.Entries.Clear();
-
-                bntx._relocationTable.Sections.Add(new RelocationTable.Section()
+            if (bntx.HasFileSizeChanges)
+                bntx._relocationTable.Build(_pointers.Select(x => new Pointer()
                 {
-                    Offset = (uint)_rltSectionRanges[0].Item1,
-                    Size = (int)_rltSectionRanges[0].Item2,
-                    EntryCount = _section1Entries.Count,
-                    FirstEntryIndex = 0,
-                });
-                bntx._relocationTable.Sections.Add(new RelocationTable.Section()
-                {
-                    Offset = (uint)_rltSectionRanges[1].Item1,
-                    Size = (int)(_rltSectionRanges[1].Item2 - _rltSectionRanges[1].Item1),
-                    EntryCount = _section2Entries.Count,
-                    FirstEntryIndex = _section1Entries.Count,
-                });
-
-                bntx._relocationTable.Entries.AddRange(_section1Entries);
-                bntx._relocationTable.Entries.AddRange(_section2Entries);
-            }
-            /*  bntx._relocationTable.Build(_pointers.Select(x => new Pointer()
-              {
-                  Position = x.Key,
-                  Target = x.Value,
-              }).ToList(), _rltSectionRanges, writer.Position);*/
+                    Position = x.Key,
+                    Target = x.Value,
+                }).ToList(), _rltSectionRanges, writer.Position);
 
             WriteOffset(writer, 24);
             WriteRelocationTable(writer, bntx._relocationTable);
@@ -312,10 +243,6 @@ namespace BntxLibrary
             int index = 0;
             foreach (var tex in bntx.Textures.Values)
             {
-                // Ensure there is atleast one mip offset
-                if (tex.MipOffsets.Length == 0)
-                    tex.MipOffsets = new ulong[1];
-
                 var startOffset = writer.Position;
                 using (writer.TemporarySeek(dataOffsets[index], SeekOrigin.Begin)) {
                     for (int i = 0; i < tex.MipOffsets.Length; i++)
@@ -344,10 +271,6 @@ namespace BntxLibrary
                 writer.Write(nodes[i].Reference);
                 writer.Write(nodes[i].IdxLeft);
                 writer.Write(nodes[i].IdxRight);
-
-                if (i == 0)
-                    InsertRelocationPointerSection1(writer.Position, 1, nodes.Length, 1);
-
                 SaveNameOffset(i == 0 ? "" : nodes[i].Key, writer);
             }
         }
