@@ -22,6 +22,9 @@ namespace BntxLibrary
         public static void Write(BntxFile bntx, FileWriter writer)
         {
             _pointers = new Dictionary<long, long>();
+            _stringTable.Clear();
+            _rltSectionRanges.Clear();
+            _blocks.Clear();
 
             switch (bntx.Platform)
             {
@@ -32,8 +35,7 @@ namespace BntxLibrary
 
             var section1Start = writer.Position;
 
-            // Byte order mark
-            writer.SetByteOrder(bntx.BinHeader.ByteOrder);
+            writer.BigEndian = bntx.BigEndian;
             writer.WriteStruct(bntx.BinHeader);
 
             // Block offset is 0x16 (ushort) in the bin header
@@ -73,6 +75,12 @@ namespace BntxLibrary
                 // Todo slot section
                 tex.Header.DescSlotOffset = 0UL;
 
+                if (tex.UserData.Count == 0)
+                {
+                    tex.Header.UserDataOffset = 0;
+                    tex.Header.UserDataDictionaryOffset = 0;
+                }
+
                 var headerStart = writer.Position;
                 WriteOffset(writer, _ofsStartImagePointers + textureIndex * 8);
                 writer.WriteStruct(tex.Header);
@@ -101,6 +109,7 @@ namespace BntxLibrary
                 WriteOffset(writer, headerStart + 96 + 16);
                 dataOffsets.Add(writer.Position);
                 writer.Write(new ulong[tex.Header.MipCount]); // Mip offsets
+                WriteUserData(writer, tex, headerStart);
                 textureIndex++;
             }
 
@@ -126,14 +135,13 @@ namespace BntxLibrary
             // Relocation table
             _rltSectionRanges.Add((section2Start, writer.Position));
 
-            if (bntx.HasFileSizeChanges)
-                bntx._relocationTable.Build(_pointers.Select(x => new Pointer()
-                {
-                    Position = x.Key,
-                    Target = x.Value,
-                }).ToList(), _rltSectionRanges, writer.Position);
+            bntx._relocationTable.Build(_pointers.Select(x => new Pointer()
+            {
+                Position = x.Key,
+                Target = x.Value,
+            }).ToList(), _rltSectionRanges, writer.Position);
 
-            WriteOffset(writer, 24);
+            writer.WriteSectionSizeU32(24, writer.Position);
             WriteRelocationTable(writer, bntx._relocationTable);
 
             // Bntx size
@@ -142,6 +150,80 @@ namespace BntxLibrary
             // Apply hash related values which detect file changes for saving
             bntx._hashSize = bntx.CalculateSizeHash();
             bntx._hash = bntx.CalculateHash();
+        }
+
+        static void WriteUserData(FileWriter writer, BntxTexture tex, long headerStart)
+        {
+            if (tex.UserData.Count == 0)
+                return;
+
+            var entries = tex.UserData.Values.ToList();
+            var headerPositions = new long[entries.Count];
+
+            writer.Align(8);
+            long entriesStart = writer.Position;
+            for (int i = 0; i < entries.Count; i++)
+            {
+                var header = entries[i].Header;
+                header.NameOffset = (ulong)_stringTable[entries[i].Name];
+                header.DataOffset = 0;
+                header.Count = (uint)((Array)entries[i].Value).Length;
+
+                headerPositions[i] = writer.Position;
+                _pointers[writer.Position] = (long)header.NameOffset;
+                writer.WriteStruct(header);
+            }
+
+            // Values
+            for (int i = 0; i < entries.Count; i++)
+            {
+                var entry = entries[i];
+                int count = (int)((Array)entry.Value).Length;
+                if (count == 0)
+                    continue;
+
+                writer.Align(8);
+                long dataStart = writer.Position;
+                switch (entry.Type)
+                {
+                    case UserDataType.String:
+                    case UserDataType.WString:
+                        foreach (string value in entry.GetValueArray<string>())
+                        {
+                            _pointers[writer.Position] = _stringTable[value];
+                            writer.Write((ulong)_stringTable[value]);
+                        }
+                        break;
+                    case UserDataType.Int32:
+                        foreach (int value in entry.GetValueArray<int>()) writer.Write(value);
+                        break;
+                    case UserDataType.Single:
+                        foreach (float value in entry.GetValueArray<float>()) writer.Write(value);
+                        break;
+                    case UserDataType.Byte:
+                        writer.Write(entry.GetValueArray<byte>());
+                        break;
+                }
+
+                _pointers[headerPositions[i] + 8] = dataStart;
+                using (writer.TemporarySeek(headerPositions[i] + 8, SeekOrigin.Begin))
+                    writer.Write((ulong)dataStart);
+            }
+
+            // Dictionary
+            writer.Align(8);
+            long dictionaryStart = writer.Position;
+            WriteDictionary(writer, tex.UserData.Keys.ToList());
+
+            // Point the texture header at the entries and the dictionary
+            tex.Header.UserDataOffset = (ulong)entriesStart;
+            tex.Header.UserDataDictionaryOffset = (ulong)dictionaryStart;
+            _pointers[headerStart + 96 + 24] = entriesStart;
+            _pointers[headerStart + 96 + 56] = dictionaryStart;
+            using (writer.TemporarySeek(headerStart + 96 + 24, SeekOrigin.Begin))
+                writer.Write((ulong)entriesStart);
+            using (writer.TemporarySeek(headerStart + 96 + 56, SeekOrigin.Begin))
+                writer.Write((ulong)dictionaryStart);
         }
 
         static void WriteBlockHeaders(FileWriter writer, long endOfBlock)
@@ -180,33 +262,37 @@ namespace BntxLibrary
             Dictionary<string, Encoding> bntxStrings = new Dictionary<string, Encoding>();
             foreach (var tex in bntx.Textures.Values)
             {
-                bntxStrings.Add(tex.Name, null);
+                bntxStrings.TryAdd(tex.Name, null);
                 foreach (var userdata in tex.UserData.Values)
                 {
+                    bntxStrings.TryAdd(userdata.Name, null);
+
+                    // String values are pointers into the string table
                     if (userdata.Type != UserDataType.String &&
                        userdata.Type != UserDataType.WString)
                         continue;
 
                     foreach (var data in userdata.GetValueArray<string>())
-                    {
-                        if (userdata.Type == UserDataType.String)
-                            bntxStrings.TryAdd(data, Encoding.UTF8);
-                        if (userdata.Type == UserDataType.String)
-                            bntxStrings.TryAdd(data, Encoding.Unicode);
-                    }
+                        bntxStrings.TryAdd(data, BntxFile.StringEncoding);
                 }
             }
-            if (!bntxStrings.ContainsKey(bntx.Name))
-                bntxStrings.Add(bntx.Name, null);
-
-            bntxStrings.Add("", null);
+            bntxStrings.TryAdd(bntx.Name, null);
+            bntxStrings.TryAdd("", null);
 
             var order = bntx.Strings.OrderBy(x => x.Key).Select(x => x.Value).ToList();
 
             Dictionary<string, Encoding> sorted = new Dictionary<string, Encoding>();
 
-            foreach (KeyValuePair<string, Encoding> entry in bntxStrings.OrderBy(x => order.IndexOf(x.Key)))
+            // The empty string always comes first, strings new to the file go after the existing ones
+            foreach (KeyValuePair<string, Encoding> entry in bntxStrings.OrderBy(x =>
+            {
+                if (x.Key == "") return -1;
+                int i = order.IndexOf(x.Key);
+                return i < 0 ? int.MaxValue : i;
+            }))
+            {
                 sorted.Add(entry.Key, entry.Value);
+            }
 
             writer.Align(4);
             uint stringPoolStart = (uint)writer.Position;
@@ -220,10 +306,10 @@ namespace BntxLibrary
 
                 _stringTable.Add(entry.Key, writer.Position);
 
-                writer.Write((short)entry.Key.Length);
+                var encoding = entry.Value ?? BntxFile.StringEncoding;
+                writer.Write((short)encoding.GetByteCount(entry.Key)); // length in bytes
                 // Write the name.
-                writer.WriteZeroTerminatedString(entry.Key,
-                    entry.Value != null ? entry.Value : writer.Encoding);
+                writer.WriteZeroTerminatedString(entry.Key, encoding);
 
                 writer.Align(2);
             }
@@ -314,19 +400,11 @@ namespace BntxLibrary
 
         static void WriteOffset(FileWriter writer, long pos)
         {
-            if (!_pointers.ContainsKey(writer.Position))
-                _pointers.Add(writer.Position, pos);
-            else
-                _pointers[writer.Position] = pos;
+            _pointers[pos] = writer.Position;
 
             var ofs = writer.Position;
             using (writer.TemporarySeek(pos, SeekOrigin.Begin))
                 writer.Write(ofs);
-        }
-
-        static void SaveOffset(FileWriter writer, object structInstance) {
-            _pointers.TryAdd(writer.Position, 0);
-            writer.Write(0UL);
         }
     }
 }

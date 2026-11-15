@@ -36,12 +36,12 @@ namespace BntxLibrary
             this.Sections.Clear();
             this.Entries.Clear();
 
-            // A section marker where a section starts for processing relocation data 
+            pointers = pointers.Where(x => x.Target != 0).ToList();
             for (int s = 0; s < sectionRanges.Count; s++)
             {
                 var rangeStart = sectionRanges[s].Item1;
                 var rangeEnd = sectionRanges[s].Item2;
-                // Use pointers that target within the section we want to edit
+                // Range of pointers used for the section
                 var sectionPointers = pointers.Where(x =>
                     x.Target >= rangeStart &&
                     x.Target <= rangeEnd).OrderBy(x => x.Position).ToList();
@@ -101,70 +101,9 @@ namespace BntxLibrary
             Console.WriteLine($"Built relocation table with {this.Entries.Count} entries.");
         }
 
-
-        // Example
-        // DictionaryEntry entries[18]
-        //
-        // DictionaryEntry
-        // {
-        //      public int LeftIndex;
-        //      public ushort LeftIndex;
-        //      public ushort RightIndex;
-        //      public ulong NameOffset; // Pointer here
-        // }
-        // Relocation becomes
-        // PointersOffset = 8 (offset to first pointer)
-        // ArrayCount = 18 ( we have 18 dictionaries)
-        // PointerCount = 1 (we have only 1 offset)
-        // PaddingCount = 1 (we read 1 uint64 until next offset from the next DictionaryEntry entry. All sections are aligned by 8.
         public List<Entry> Build(List<Pointer> sectionPointers)
         {
-            const int PTR_SIZE = 8;
-
-            List<Entry> entries = new List<Entry>();
-            int i = 0;
-            while (i < sectionPointers.Count)
-            {
-                long basePos = sectionPointers[i].Position;
-
-                // Find stride to next pointer
-                long stride = 0;
-                if (i + 1 < sectionPointers.Count)
-                    stride = sectionPointers[i + 1].Position - sectionPointers[i].Position;
-
-                // Consecutive pointers with same stride
-                int arrayCount = 1;
-                int j = i + 1;
-                while (j < sectionPointers.Count &&
-                       sectionPointers[j].Position - sectionPointers[j - 1].Position == stride)
-                {
-                    arrayCount++;
-                    j++;
-                }
-
-                // Check the padding region between our stride and pointers
-                int pointerCount = 1;
-                int paddingCount = 0;
-                if (stride > PTR_SIZE)
-                    paddingCount = (int)((stride - PTR_SIZE) / PTR_SIZE);
-
-                // If there is no padding between pointers, but there are arrays, each pointer is consecutive
-                if (paddingCount == 0 && arrayCount > 1)
-                {
-                    pointerCount = arrayCount;
-                    arrayCount = 1;
-                }
-
-                // Add entry
-                entries.Add(new Entry
-                {
-                    PointersOffset = (int)basePos,
-                    ArrayCount = (ushort)arrayCount,
-                    PointerCount = (byte)pointerCount,
-                    PaddingCount = (byte)paddingCount
-                });
-                i = j;
-            }
+            List<Entry> entries = BuildRelocationEntries(sectionPointers.Select(x => x.Position).ToList());
 
             // Verify
             HashSet<long> relocatedPositions = new HashSet<long>();
@@ -178,9 +117,9 @@ namespace BntxLibrary
                         bool added = relocatedPositions.Add(ofs);
                         if (!added)
                             throw new Exception($"Pointer offset {ofs} was relocated more than once!");
-                        ofs += PTR_SIZE;
+                        ofs += PointerSize;
                     }
-                    ofs += entry.PaddingCount * PTR_SIZE;
+                    ofs += entry.PaddingCount * PointerSize;
                 }
             }
             foreach (var p in sectionPointers)
@@ -189,6 +128,97 @@ namespace BntxLibrary
                     throw new Exception($"Failed to find pointer in relocation table {p.Position}!");
             }
             return entries;
+        }
+
+        const int PointerSize = 8;
+
+        /// <summary>
+        /// Some small AI assistance was used to help me RE/figure this out.
+        /// Groups sorted pointer positions into relocation entries.
+        /// Pointers next to each other form a run, and runs of the same length that repeat at a constant stride get chained together.
+        /// </summary>
+        private static List<Entry> BuildRelocationEntries(List<long> pointerPositions)
+        {
+            const int PointerSize = 8;
+
+            // First get consecutive offset runs
+            var runs = new List<(long Start, int Length)>();
+            foreach (var pos in pointerPositions.Distinct().OrderBy(x => x))
+            {
+                if (runs.Count > 0)
+                {
+                    var last = runs[^1];
+                    if (pos == last.Start + last.Length * PointerSize && last.Length < byte.MaxValue)
+                    {
+                        runs[^1] = (last.Start, last.Length + 1);
+                        continue;
+                    }
+                }
+                runs.Add((pos, 1));
+            }
+
+            var entries = new List<Entry>();
+
+            // Now try to chain runs of the same length that have a constant stride
+            foreach (var group in runs.GroupBy(r => r.Length))
+            {
+                int length = group.Key;
+                var list = group.ToList();
+                var used = new bool[list.Count];
+
+                // Quick lookup so we can jump by stride
+                var indexByStart = new Dictionary<long, int>();
+                for (int i = 0; i < list.Count; i++)
+                    indexByStart[list[i].Start] = i;
+
+                for (int i = 0; i < list.Count; i++)
+                {
+                    if (used[i]) continue;
+                    used[i] = true;
+
+                    int count = 1;
+                    long padding = 0;
+
+                    // See if the next unused run of this length gives us a usable stride
+                    int next = i + 1;
+                    while (next < list.Count && used[next])
+                        next++;
+
+                    if (next < list.Count)
+                    {
+                        long stride = list[next].Start - list[i].Start;
+                        long pad = stride / PointerSize - length;
+
+                        if (pad <= byte.MaxValue)
+                        {
+                            count = 2;
+                            padding = pad;
+                            used[next] = true;
+
+                            // Keep going with the same stride
+                            long expected = list[next].Start + stride;
+                            while (count < ushort.MaxValue &&
+                                   indexByStart.TryGetValue(expected, out int found) &&
+                                   !used[found])
+                            {
+                                used[found] = true;
+                                count++;
+                                expected += stride;
+                            }
+                        }
+                    }
+
+                    entries.Add(new Entry()
+                    {
+                        PointersOffset = (int)list[i].Start,
+                        PointerCount = (byte)length,
+                        ArrayCount = (ushort)count,
+                        PaddingCount = (byte)padding,
+                    });
+                }
+            }
+
+            return entries.OrderBy(e => e.PointersOffset).ToList();
         }
     }
 

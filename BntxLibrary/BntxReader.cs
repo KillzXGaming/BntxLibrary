@@ -13,9 +13,9 @@ namespace BntxLibrary
         {
             // Peek for byte order mark
             using (reader.TemporarySeek(12, SeekOrigin.Begin)) {
-                reader.ByteOrder = ByteOrder.BigEndian;
-                reader.SetByteOrder((ByteOrder)reader.ReadUInt16());
+                reader.BigEndian = reader.ReadUInt16() == 0xFFFE;
             }
+            bntx.BigEndian = reader.BigEndian;
 
             bntx.BinHeader = reader.ReadStruct<BinaryHeader>();
             reader.CheckSignature(bntx.BinHeader.Magic, "BNTX");
@@ -86,7 +86,7 @@ namespace BntxLibrary
             uint padding = reader.ReadUInt32();
             // 288
             RelocationTable table = new();
-            table.Sections = reader.ReadMultipleStructs<RelocationTable.Section>(sectionCount);
+            table.Sections = reader.ReadMultipleStructs<RelocationTable.Section>((int)sectionCount);
             table.Entries = reader.ReadMultipleStructs<RelocationTable.Entry>(table.Sections.Sum(x => x.EntryCount));
             return table;
         }
@@ -95,6 +95,7 @@ namespace BntxLibrary
         {
             var usd = new UserData();
             var header = reader.ReadStruct<UserDataHeader>();
+            usd.Header = header; // keeps the type, count and reserved bytes
             usd.Name = ReadNameOffset(header.NameOffset, reader, bntx);
 
             if (header.DataOffset  != 0) {
@@ -176,7 +177,7 @@ namespace BntxLibrary
         {
             if (nameOffset == 0) return "";
 
-            encoding = encoding ?? Encoding.UTF8;
+            encoding = encoding ?? BntxFile.StringEncoding;
 
             using (reader.TemporarySeek((long)nameOffset, SeekOrigin.Begin)) {
                 ushort length = reader.ReadUInt16();

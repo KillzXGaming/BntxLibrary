@@ -111,7 +111,7 @@ namespace BntxLibrary
 
             public void Insert(string Name)
             {
-                string bits = ToBinaryString(Name, Encoding.UTF8);
+                string bits = ToBinaryString(Name, BntxFile.StringEncoding);
                 BigInteger data = bits.Aggregate(new BigInteger(), (b, c) => b * 2 + c - '0');
                 Node current = Search(data, true);
                 int bitIdx = bit_mismatch(current.Data, data);
@@ -222,10 +222,8 @@ namespace BntxLibrary
             }
             internal string GetName()
             {
-                BigInteger data = BitLength(Data) + 7 / 8;
-                byte[] stringBytes = Data.ToByteArray();
-                Array.Reverse(stringBytes, 0, stringBytes.Length); //Convert to big endian
-                return Encoding.UTF8.GetString(stringBytes); //Decode byte[] to string
+                byte[] stringBytes = Data.ToByteArray(isUnsigned: true, isBigEndian: true);
+                return BntxFile.StringEncoding.GetString(stringBytes);
             }
             internal int GetCompactBitIdx()
             {

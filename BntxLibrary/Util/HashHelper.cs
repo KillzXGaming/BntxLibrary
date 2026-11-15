@@ -63,7 +63,7 @@ namespace BntxLibrary.Util
             }
         }
 
-        public static uint ComputeHash32(byte[] bytes) 
+        public static uint ComputeHash32(ReadOnlySpan<byte> bytes) 
         {
             // Simple FNV-1a 32-bit hash
             const uint fnvOffset = 2166136261;

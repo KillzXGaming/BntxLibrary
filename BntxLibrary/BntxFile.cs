@@ -2,6 +2,7 @@
 using BntxLibrary.Util;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace BntxLibrary
 {
@@ -15,11 +16,25 @@ namespace BntxLibrary
         internal uint _hashSize;
         internal uint _hash;
 
+
+        public static Encoding StringEncoding { get; set; } = Encoding.UTF8;
+
+        public static Encoding ShiftJis
+        {
+            get
+            {
+                Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+                return Encoding.GetEncoding(932);
+            }
+        }
+
         public bool HasFileSizeChanges
             => _hashSize != CalculateSizeHash();
 
         public bool HasAnyChanges
             => _hash != CalculateHash();
+
+        public bool BigEndian = false;
 
         /// <summary>
         /// The platform value.
@@ -140,7 +155,7 @@ namespace BntxLibrary
             {
                 hash ^= HashHelper.ComputeHash32(texture.Name);
                 hash ^= HashHelper.ComputeHash32(texture.Header);
-                hash ^= HashHelper.ComputeHash32(texture.ImageData);
+                hash ^= HashHelper.ComputeHash32(texture.ImageData.Span);
                 foreach (var usd in texture.UserData.Values)
                 {
                     hash ^= HashHelper.ComputeHash32(usd.Name);
@@ -441,7 +456,7 @@ namespace BntxLibrary
     public class UserData
     {
         // Raw header struct
-        private UserDataHeader Header;
+        internal UserDataHeader Header;
 
         /// <summary>
         /// Gets or sets the name of the user data.
@@ -551,7 +566,7 @@ namespace BntxLibrary
             VersionMicro = 0;
             VersionMinor = 0;
             VersionMajor = 4;
-            ByteOrder = 0xFFFE;
+            ByteOrder = 0xFEFF; 
             Alignment = 0xC;
             TargetAddressSize = 0x40;
             Flag = 0;
